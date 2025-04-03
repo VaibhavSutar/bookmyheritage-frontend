@@ -46,7 +46,8 @@ import { fetchPlaceById } from "../data/properties"
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, BarChart, Bar } from "recharts"
 import axios from "axios"
 import { getAuth } from "firebase/auth"
-
+import { apiroute } from "../common/localvariable"
+import { runTransaction, doc } from "firebase/firestore"
 const MuseumDetail = () => {
   const { id } = useParams()
   const theme = useTheme()
@@ -65,8 +66,8 @@ const MuseumDetail = () => {
   const [isFavorite, setIsFavorite] = useState(false)
   const [visitorCount, setVisitorCount] = useState(1)
   const [crowdPrediction, setCrowdPrediction] = useState(null)
-  const [crowdLoading, setCrowdLoading] = useState(false) // New state for loading
-  const [seasonPrediction, setSeasonPrediction] = useState(null) // New state for seasonal prediction
+  const [crowdLoading, setCrowdLoading] = useState(false)
+  const [seasonPrediction, setSeasonPrediction] = useState(null)
 
   // Available time slots (would come from API in a real app)
   const timeSlots = ["09:00", "10:30", "12:00", "14:00", "15:30", "17:00"]
@@ -93,35 +94,65 @@ const MuseumDetail = () => {
 
   // Handle booking submission
   const handleBooking = async () => {
-    const currentUser = auth.currentUser
-
+    const currentUser = auth.currentUser;
+  
     if (!currentUser) {
-      navigate("/login") // Redirect to login if no user is logged in
-      return
+      navigate("/login"); // Redirect to login if no user is logged in
+      return;
     }
-
-    if (!selectedDate || !selectedTimeSlot) return
-
+  
+    if (!selectedDate || !selectedTimeSlot || visitorCount <= 0) return;
+  
     try {
-      await addDoc(collection(db, "bookings"), {
-        userId: currentUser.uid, // Save booking under the current user
+      const bookingRef = await addDoc(collection(db, "bookings"), {
+        userId: currentUser.uid,
         museumId: id,
         date: selectedDate,
         timeSlot: selectedTimeSlot,
         visitors: visitorCount,
-      })
-      setBookingSuccess(true)
-      setError(null)
-
+        username: currentUser.displayName,
+      });
+  
+      // Get reference to the corresponding museum document
+      const museumRef = doc(db, "places", id);
+  
+      await runTransaction(db, async (transaction) => {
+        const museumDoc = await transaction.get(museumRef);
+        if (!museumDoc.exists()) throw new Error("Museum not found");
+  
+        const currentData = museumDoc.data();
+        const updatedBookings = (currentData.bookingsCount || 0) + 1;
+  
+        // Update daily stats
+        const bookingDate = selectedDate.toISOString().split("T")[0]; // Format: "YYYY-MM-DD"
+        const dailyStats = currentData.dailyStats || {};
+        dailyStats[bookingDate] = (dailyStats[bookingDate] || 0) + visitorCount;
+  
+        const isToday = bookingDate === new Date().toISOString().split("T")[0];
+        const updatedCrowd = isToday
+          ? (Number(currentData.currentcrowd) || 0) + visitorCount
+          : currentData.currentcrowd;
+  
+        transaction.update(museumRef, {
+          currentcrowd: updatedCrowd,
+          bookingsCount: updatedBookings,
+          dailyStats,
+        });
+      });
+  
+      setBookingSuccess(true);
+      setError(null);
+  
       // Reset form after successful booking
       setTimeout(() => {
-        setBookingSuccess(false)
-      }, 5000)
+        setBookingSuccess(false);
+      }, 5000);
     } catch (error) {
-      setError("Failed to book your visit, please try again.")
+      console.error("Booking Error:", error);
+      setError("Failed to book your visit, please try again.");
     }
-  }
-
+  };
+  
   const handleNextImage = () => {
     if (museum?.images?.length > 0) {
       setCurrentImageIndex((prevIndex) => (prevIndex === museum.images.length - 1 ? 0 : prevIndex + 1))
@@ -161,7 +192,7 @@ const MuseumDetail = () => {
     const hour = parseInt(time.split(":")[0])
 
     try {
-      const crowdResponse = await axios.post("http://127.0.0.1:5000/predict/crowd", {
+      const crowdResponse = await axios.post(`${apiroute}/predict/crowd`, {
         day_of_week: dayOfWeek,
         is_weekend: isWeekend,
         is_holiday: isHoliday,
@@ -171,7 +202,7 @@ const MuseumDetail = () => {
       })
       setCrowdPrediction(crowdResponse.data.prediction)
 
-      const seasonResponse = await axios.post("http://127.0.0.1:5000/predict/season", {
+      const seasonResponse = await axios.post(`${apiroute}/predict/season`, {
         month,
         temperature,
         is_holiday: isHoliday,
@@ -181,6 +212,18 @@ const MuseumDetail = () => {
       console.error("Error fetching predictions:", error)
     } finally {
       setCrowdLoading(false) // Stop loading
+    }
+  }
+
+  const handleShare = () => {
+    if (navigator.share) {
+      navigator.share({
+        title: museum.name,
+        text: `Check out ${museum.name} located in ${museum.location?.city}, ${museum.location?.country}.`,
+        url: window.location.href,
+      }).catch((error) => console.error("Error sharing:", error));
+    } else {
+      alert("Sharing is not supported on this browser.");
     }
   }
 
@@ -259,6 +302,7 @@ const MuseumDetail = () => {
                   "&:hover": { bgcolor: "rgba(255,255,255,0.9)" },
                 }}
                 onClick={handlePrevImage}
+                aria-label="Previous image"
               >
                 <ArrowBack />
               </IconButton>
@@ -272,6 +316,7 @@ const MuseumDetail = () => {
                   "&:hover": { bgcolor: "rgba(255,255,255,0.9)" },
                 }}
                 onClick={handleNextImage}
+                aria-label="Next image"
               >
                 <ArrowForward />
               </IconButton>
@@ -283,19 +328,24 @@ const MuseumDetail = () => {
                   transform: "translateX(-50%)",
                   display: "flex",
                   gap: 1,
+                  bgcolor: "rgba(0,0,0,0.5)",
+                  borderRadius: 10,
+                  px: 2,
+                  py: 1,
                 }}
               >
                 {museum.images.map((_, index) => (
                   <Box
                     key={index}
                     sx={{
-                      width: 8,
-                      height: 8,
+                      width: 10,
+                      height: 10,
                       borderRadius: "50%",
                       bgcolor: index === currentImageIndex ? "primary.main" : "rgba(255,255,255,0.7)",
                       cursor: "pointer",
                     }}
                     onClick={() => setCurrentImageIndex(index)}
+                    aria-label={`Go to image ${index + 1}`}
                   />
                 ))}
               </Box>
@@ -314,12 +364,34 @@ const MuseumDetail = () => {
             <IconButton
               sx={{ bgcolor: "rgba(255,255,255,0.8)", "&:hover": { bgcolor: "rgba(255,255,255,0.9)" } }}
               onClick={() => setIsFavorite(!isFavorite)}
+              aria-label={isFavorite ? "Remove from favorites" : "Add to favorites"}
             >
               {isFavorite ? <Favorite color="error" /> : <FavoriteBorder />}
             </IconButton>
-            <IconButton sx={{ bgcolor: "rgba(255,255,255,0.8)", "&:hover": { bgcolor: "rgba(255,255,255,0.9)" } }}>
+            <IconButton 
+              sx={{ bgcolor: "rgba(255,255,255,0.8)", "&:hover": { bgcolor: "rgba(255,255,255,0.9)" } }}
+              onClick={handleShare}
+              aria-label="Share"
+            >
               <Share />
             </IconButton>
+          </Box>
+          
+          {/* Image counter overlay */}
+          <Box
+            sx={{
+              position: "absolute",
+              bottom: 16,
+              right: 16,
+              bgcolor: "rgba(0,0,0,0.7)",
+              color: "white",
+              px: 2,
+              py: 0.5,
+              borderRadius: 2,
+              fontSize: "0.9rem",
+            }}
+          >
+            {currentImageIndex + 1} / {museum.images?.length || 1}
           </Box>
         </Box>
       </Paper>
@@ -327,19 +399,31 @@ const MuseumDetail = () => {
       <Grid container spacing={4}>
         {/* Museum Details */}
         <Grid item xs={12} md={8}>
-          <Typography variant="h3" component="h1" gutterBottom fontWeight="bold">
+          <Typography variant="h3" component="h1" gutterBottom fontWeight="bold" color="text.primary">
             {museum.name}
           </Typography>
 
           <Box sx={{ display: "flex", flexWrap: "wrap", gap: 2, mb: 3 }}>
             <Chip
               icon={<LocationOn />}
-              label={`${museum.location[0]?.city}, ${museum.location[0]?.country}`}
+              label={`${museum.location?.city}, ${museum.location?.country}`}
               color="primary"
               variant="outlined"
+              sx={{ fontSize: "0.95rem", py: 0.5 }}
             />
-            <Chip icon={<Category />} label={museum.type} color="secondary" variant="outlined" />
-            <Chip icon={<Euro />} label={museum.priceType} variant="outlined" />
+            <Chip 
+              icon={<Category />} 
+              label={museum.type} 
+              color="secondary" 
+              variant="outlined" 
+              sx={{ fontSize: "0.95rem", py: 0.5 }}
+            />
+            <Chip 
+              icon={<Euro />} 
+              label={museum.priceType} 
+              variant="outlined" 
+              sx={{ fontSize: "0.95rem", py: 0.5 }}
+            />
           </Box>
 
           <Box sx={{ mb: 4 }}>
@@ -347,92 +431,91 @@ const MuseumDetail = () => {
               value={tabValue}
               onChange={handleTabChange}
               variant={isMobile ? "fullWidth" : "standard"}
-              sx={{ mb: 2 }}
+              sx={{ 
+                mb: 2,
+                "& .MuiTab-root": {
+                  fontWeight: 600,
+                  fontSize: "1rem",
+                },
+                "& .Mui-selected": {
+                  color: "primary.main",
+                }
+              }}
+              aria-label="Museum information tabs"
             >
-              <Tab label="Overview" />
-              <Tab label="Exhibits" />
-              <Tab label="Visitor Info" />
+              <Tab label="Overview" id="tab-0" aria-controls="tabpanel-0" />
+              <Tab label="Visitor Info" id="tab-1" aria-controls="tabpanel-1" />
             </Tabs>
 
             <Divider sx={{ mb: 3 }} />
 
-            {tabValue === 0 && (
-              <Box>
-                <Typography variant="body1" paragraph sx={{ fontSize: "1.1rem", lineHeight: 1.7 }}>
-                  {museum.description}
-                </Typography>
-                <Typography variant="body1" paragraph sx={{ fontSize: "1.1rem", lineHeight: 1.7 }}>
-                  {museum.description} {/* Duplicated for demo purposes */}
-                </Typography>
-              </Box>
-            )}
+            <Box role="tabpanel" id="tabpanel-0" aria-labelledby="tab-0" hidden={tabValue !== 0}>
+              {tabValue === 0 && (
+                <Box>
+                  <Typography variant="body1" paragraph sx={{ fontSize: "1.1rem", lineHeight: 1.7, color: "text.primary" }}>
+                    {museum.description}
+                  </Typography>
+                </Box>
+              )}
+            </Box>
 
-            {tabValue === 1 && (
-              <Box>
-                <Typography variant="h6" gutterBottom>
-                  Current Exhibitions
-                </Typography>
-                <Grid container spacing={2}>
-                  {[1, 2, 3].map((item) => (
-                    <Grid item xs={12} sm={6} md={4} key={item}>
-                      <Card sx={{ height: "100%" }}>
-                        <CardMedia
-                          component="img"
-                          height="140"
-                          image={`https://via.placeholder.com/300?text=Exhibit+${item}`}
-                          alt={`Exhibit ${item}`}
-                        />
-                        <CardContent>
-                          <Typography variant="h6">Exhibit Title {item}</Typography>
-                          <Typography variant="body2" color="text.secondary">
-                            A fascinating exhibit showcasing the history and culture.
-                          </Typography>
-                        </CardContent>
-                      </Card>
+            <Box role="tabpanel" id="tabpanel-1" aria-labelledby="tab-1" hidden={tabValue !== 1}>
+              {tabValue === 1 && (
+                <Box>
+                  <Grid container spacing={3}>
+                    <Grid item xs={12} sm={6}>
+                      <Typography variant="h6" gutterBottom color="text.primary" fontWeight={600}>
+                        Opening Hours
+                      </Typography>
+                      <Paper elevation={1} sx={{ p: 2, borderRadius: 1 }}>
+                        <Box sx={{ display: "flex", flexDirection: "column", gap: 1 }}>
+                          <Box sx={{ display: "flex", justifyContent: "space-between" }}>
+                            <Typography color="text.primary" fontWeight={500}>Monday - Friday</Typography>
+                            <Typography color="text.primary">9:00 AM - 6:00 PM</Typography>
+                          </Box>
+                          <Divider sx={{ my: 1 }} />
+                          <Box sx={{ display: "flex", justifyContent: "space-between" }}>
+                            <Typography color="text.primary" fontWeight={500}>Saturday - Sunday</Typography>
+                            <Typography color="text.primary">10:00 AM - 8:00 PM</Typography>
+                          </Box>
+                        </Box>
+                      </Paper>
                     </Grid>
-                  ))}
-                </Grid>
-              </Box>
-            )}
-
-            {tabValue === 2 && (
-              <Box>
-                <Grid container spacing={3}>
-                  <Grid item xs={12} sm={6}>
-                    <Typography variant="h6" gutterBottom>
-                      Opening Hours
-                    </Typography>
-                    <Box sx={{ display: "flex", flexDirection: "column", gap: 1 }}>
-                      <Box sx={{ display: "flex", justifyContent: "space-between" }}>
-                        <Typography>Monday - Friday</Typography>
-                        <Typography>9:00 AM - 6:00 PM</Typography>
-                      </Box>
-                      <Box sx={{ display: "flex", justifyContent: "space-between" }}>
-                        <Typography>Saturday - Sunday</Typography>
-                        <Typography>10:00 AM - 8:00 PM</Typography>
-                      </Box>
-                    </Box>
+                    <Grid item xs={12} sm={6}>
+                      <Typography variant="h6" gutterBottom color="text.primary" fontWeight={600}>
+                        Facilities
+                      </Typography>
+                      <Paper elevation={1} sx={{ p: 2, borderRadius: 1 }}>
+                        <Box sx={{ display: "flex", flexWrap: "wrap", gap: 1 }}>
+                          <Chip 
+                            icon={<AccessibilityNew />} 
+                            label="Wheelchair Access" 
+                            sx={{ bgcolor: "primary.light", color: "primary.contrastText", fontWeight: 500 }}
+                          />
+                          <Chip 
+                            icon={<Language />} 
+                            label="Audio Guides" 
+                            sx={{ bgcolor: "secondary.light", color: "secondary.contrastText", fontWeight: 500 }}
+                          />
+                          <Chip 
+                            icon={<AccessTime />} 
+                            label="Guided Tours" 
+                            sx={{ bgcolor: "info.light", color: "info.contrastText", fontWeight: 500 }}
+                          />
+                        </Box>
+                      </Paper>
+                    </Grid>
                   </Grid>
-                  <Grid item xs={12} sm={6}>
-                    <Typography variant="h6" gutterBottom>
-                      Facilities
-                    </Typography>
-                    <Box sx={{ display: "flex", flexWrap: "wrap", gap: 1 }}>
-                      <Chip icon={<AccessibilityNew />} label="Wheelchair Access" />
-                      <Chip icon={<Language />} label="Audio Guides" />
-                      <Chip icon={<AccessTime />} label="Guided Tours" />
-                    </Box>
-                  </Grid>
-                </Grid>
-              </Box>
-            )}
+                </Box>
+              )}
+            </Box>
           </Box>
         </Grid>
 
         {/* Booking Section */}
         <Grid item xs={12} md={4}>
           <Paper elevation={3} sx={{ p: 3, borderRadius: 2 }}>
-            <Typography variant="h5" gutterBottom sx={{ display: "flex", alignItems: "center", gap: 1 }}>
+            <Typography variant="h5" gutterBottom sx={{ display: "flex", alignItems: "center", gap: 1, color: "primary.main", fontWeight: 600 }}>
               <CalendarMonth color="primary" />
               Book Your Visit
             </Typography>
@@ -446,6 +529,9 @@ const MuseumDetail = () => {
                   borderColor: "divider",
                   borderRadius: 1,
                   mb: 3,
+                  "& .MuiTypography-root": {
+                    color: "text.primary",
+                  },
                 }}
               >
                 <DateCalendar
@@ -456,6 +542,11 @@ const MuseumDetail = () => {
                     "& .MuiPickersDay-root.Mui-selected": {
                       backgroundColor: "primary.main",
                       color: "primary.contrastText",
+                      fontWeight: "bold",
+                    },
+                    "& .MuiDayCalendar-weekDayLabel": {
+                      color: "text.primary",
+                      fontWeight: "bold",
                     },
                   }}
                 />
@@ -464,7 +555,7 @@ const MuseumDetail = () => {
 
             {selectedDate && (
               <>
-                <Typography variant="subtitle1" gutterBottom>
+                <Typography variant="subtitle1" gutterBottom sx={{ fontWeight: 600, color: "text.primary" }}>
                   Select Time Slot:
                 </Typography>
                 <Box sx={{ display: "flex", flexWrap: "wrap", gap: 1, mb: 3 }}>
@@ -475,83 +566,92 @@ const MuseumDetail = () => {
                       onClick={() => handleTimeSlotSelection(time)}
                       color={selectedTimeSlot === time ? "primary" : "default"}
                       variant={selectedTimeSlot === time ? "filled" : "outlined"}
-                      sx={{ cursor: "pointer" }}
+                      sx={{ 
+                        cursor: "pointer", 
+                        fontWeight: selectedTimeSlot === time ? 600 : 400,
+                        fontSize: "0.95rem",
+                        "& .MuiChip-label": {
+                          color: selectedTimeSlot === time ? "primary.contrastText" : "text.primary"
+                        }
+                      }}
                     />
                   ))}
                 </Box>
 
                 {/* Crowd Prediction Graph */}
                 {crowdLoading ? (
-                  <Typography variant="body1" color="text.secondary" sx={{ mb: 3 }}>
+                  <Alert severity="info" sx={{ mb: 3 }}>
                     Loading predictions...
-                  </Typography>
+                  </Alert>
                 ) : (
                   <>
                   {crowdPrediction !== null && (
-  <Card sx={{ mb: 3, p: 2 }}>
-    <CardContent>
-      <Typography variant="h6" gutterBottom>
-        Crowd Prediction
-      </Typography>
-      <Typography variant="body2" color="textSecondary" sx={{ mb: 2 }}>
-        Estimated crowd density at the selected time.
-      </Typography>
-      <ResponsiveContainer width="100%" height={220}>
-        <BarChart
-          data={[{ name: "Selected Time", prediction: crowdPrediction }]}
-          margin={{ top: 10, right: 20, left: 10, bottom: 5 }}
-        >
-          <CartesianGrid strokeDasharray="3 3" />
-          <XAxis dataKey="name" />
-          <YAxis />
-          <Tooltip />
-          <Bar dataKey="prediction" fill="#4CAF50" barSize={50} />
-        </BarChart>
-      </ResponsiveContainer>
-    </CardContent>
-  </Card>
-)}
-
-{/* 
-                    {seasonPrediction !== null && (
-                      <Box sx={{ mb: 3 }}>
-                        <Typography variant="subtitle1" gutterBottom>
-                          Seasonal Prediction:
+                    <Card sx={{ mb: 3, p: 2, boxShadow: 2 }}>
+                      <CardContent>
+                        <Typography variant="h6" gutterBottom color="text.primary" fontWeight={600}>
+                          Crowd Prediction
                         </Typography>
-                        <ResponsiveContainer width="100%" height={200}>
+                        <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+                          Estimated crowd density at the selected time.
+                        </Typography>
+                        <ResponsiveContainer width="100%" height={220}>
                           <BarChart
-                            data={[{ name: "Seasonal Impact", prediction: seasonPrediction }]}
-                            margin={{ top: 5, right: 20, left: 10, bottom: 5 }}
+                            data={[{ name: "Selected Time", prediction: crowdPrediction }]}
+                            margin={{ top: 10, right: 20, left: 10, bottom: 5 }}
                           >
                             <CartesianGrid strokeDasharray="3 3" />
-                            <XAxis dataKey="name" />
-                            <YAxis />
-                            <Tooltip />
-                            <Bar dataKey="prediction" fill="#82ca9d" />
+                            <XAxis dataKey="name" tick={{ fill: theme.palette.text.primary }} />
+                            <YAxis tick={{ fill: theme.palette.text.primary }} />
+                            <Tooltip 
+                              contentStyle={{ 
+                                backgroundColor: theme.palette.background.paper,
+                                color: theme.palette.text.primary,
+                                border: `1px solid ${theme.palette.divider}`,
+                                borderRadius: '4px',
+                                boxShadow: '0 2px 8px rgba(0,0,0,0.15)'
+                              }}
+                            />
+                            <Bar dataKey="prediction" fill="#4CAF50" barSize={50} />
                           </BarChart>
                         </ResponsiveContainer>
-                      </Box>
-                    )} */}
+                        <Box sx={{ display: "flex", justifyContent: "center", mt: 2 }}>
+                          <Chip 
+                            label={crowdPrediction < 30 ? "Low Crowd" : crowdPrediction < 70 ? "Moderate Crowd" : "High Crowd"} 
+                            color={crowdPrediction < 30 ? "success" : crowdPrediction < 70 ? "warning" : "error"}
+                            sx={{ fontWeight: 600 }}
+                          />
+                        </Box>
+                      </CardContent>
+                    </Card>
+                  )}
                   </>
                 )}
 
                 <Box sx={{ mb: 3 }}>
-                  <Typography variant="subtitle1" gutterBottom>
+                  <Typography variant="subtitle1" gutterBottom sx={{ fontWeight: 600, color: "text.primary" }}>
                     Number of Visitors:
                   </Typography>
-                  <Box sx={{ display: "flex", alignItems: "center", gap: 2 }}>
+                  <Paper elevation={1} sx={{ p: 2, display: "flex", alignItems: "center", justifyContent: "center", gap: 2 }}>
                     <Button
-                      variant="outlined"
+                      variant="contained"
                       size="small"
                       onClick={() => setVisitorCount(Math.max(1, visitorCount - 1))}
+                      aria-label="Decrease visitors"
+                      sx={{ minWidth: 36, height: 36 }}
                     >
                       -
                     </Button>
-                    <Typography variant="h6">{visitorCount}</Typography>
-                    <Button variant="outlined" size="small" onClick={() => setVisitorCount(visitorCount + 1)}>
+                    <Typography variant="h6" color="text.primary" fontWeight={600}>{visitorCount}</Typography>
+                    <Button 
+                      variant="contained" 
+                      size="small" 
+                      onClick={() => setVisitorCount(visitorCount + 1)}
+                      aria-label="Increase visitors"
+                      sx={{ minWidth: 36, height: 36 }}
+                    >
                       +
                     </Button>
-                  </Box>
+                  </Paper>
                 </Box>
               </>
             )}
@@ -568,6 +668,12 @@ const MuseumDetail = () => {
                 fontSize: "1.1rem",
                 textTransform: "none",
                 borderRadius: 2,
+                fontWeight: 600,
+                boxShadow: 3,
+                "&:disabled": {
+                  bgcolor: "action.disabledBackground",
+                  color: "text.disabled",
+                }
               }}
             >
               {selectedDate && selectedTimeSlot
@@ -576,7 +682,17 @@ const MuseumDetail = () => {
             </Button>
 
             {selectedDate && selectedTimeSlot && (
-              <Typography variant="body2" color="text.secondary" sx={{ mt: 1, textAlign: "center" }}>
+              <Typography 
+                variant="body2" 
+                sx={{ 
+                  mt: 1.5, 
+                  textAlign: "center", 
+                  color: "text.secondary",
+                  backgroundColor: "action.hover",
+                  p: 1,
+                  borderRadius: 1
+                }}
+              >
                 {visitorCount} {visitorCount === 1 ? "visitor" : "visitors"} • Cancellation available up to 24h before
               </Typography>
             )}
@@ -592,7 +708,10 @@ const MuseumDetail = () => {
         anchorOrigin={{ vertical: "bottom", horizontal: "center" }}
       >
         <Alert severity="success" variant="filled" onClose={() => setBookingSuccess(false)} sx={{ width: "100%" }}>
-          Booking confirmed for {selectedDate?.toLocaleDateString()} at {selectedTimeSlot}!
+          <Typography fontWeight={600}>Booking Confirmed!</Typography>
+          <Typography variant="body2">
+            Your visit is scheduled for {selectedDate?.toLocaleDateString()} at {selectedTimeSlot}
+          </Typography>
         </Alert>
       </Snackbar>
     </Container>
@@ -600,4 +719,3 @@ const MuseumDetail = () => {
 }
 
 export default MuseumDetail
-

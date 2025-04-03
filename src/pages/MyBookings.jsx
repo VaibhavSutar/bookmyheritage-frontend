@@ -13,6 +13,10 @@ import {
   Button,
   CircularProgress,
   Alert,
+  MenuItem,
+  Select,
+  FormControl,
+  InputLabel,
 } from "@mui/material";
 import {
   CalendarMonth,
@@ -29,6 +33,31 @@ const MyBookings = () => {
   const [bookings, setBookings] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  const [sortOrder, setSortOrder] = useState("asc"); // 'asc' or 'desc'
+  const [filter, setFilter] = useState("all"); // 'all', 'upcoming', 'past'
+
+  const handleSortChange = (event) => {
+    setSortOrder(event.target.value);
+  };
+
+  const handleFilterChange = (event) => {
+    setFilter(event.target.value);
+  };
+
+  const filteredAndSortedBookings = bookings
+    .filter((booking) => {
+      if (filter === "upcoming") {
+        return new Date(booking.checkIn) >= new Date();
+      } else if (filter === "past") {
+        return new Date(booking.checkIn) < new Date();
+      }
+      return true; // 'all'
+    })
+    .sort((a, b) => {
+      const dateA = new Date(a.checkIn);
+      const dateB = new Date(b.checkIn);
+      return sortOrder === "asc" ? dateA - dateB : dateB - dateA;
+    });
 
   useEffect(() => {
     if (!authLoading && !user) {
@@ -60,10 +89,6 @@ const MyBookings = () => {
               checkIn: data.date.toDate().toISOString().split("T")[0],
               timeSlot: data.timeSlot,
               visitors: data.visitors,
-              description: placeData.description || "No description available.",
-              priceType: placeData.priceType || "unknown",
-              type: placeData.type || "unknown",
-              status: "upcoming", // Default status
             };
           })
         );
@@ -115,6 +140,32 @@ const MyBookings = () => {
               My Bookings
             </Typography>
 
+            <Box
+              sx={{
+                display: "flex",
+                justifyContent: "space-between",
+                alignItems: "center",
+                mb: 3,
+              }}
+            >
+              <FormControl sx={{ minWidth: 120 }}>
+                <InputLabel>Sort By</InputLabel>
+                <Select value={sortOrder} onChange={handleSortChange}>
+                  <MenuItem value="asc">Date (Ascending)</MenuItem>
+                  <MenuItem value="desc">Date (Descending)</MenuItem>
+                </Select>
+              </FormControl>
+
+              <FormControl sx={{ minWidth: 120 }}>
+                <InputLabel>Filter</InputLabel>
+                <Select value={filter} onChange={handleFilterChange}>
+                  <MenuItem value="all">All</MenuItem>
+                  <MenuItem value="upcoming">Upcoming</MenuItem>
+                  <MenuItem value="past">Past</MenuItem>
+                </Select>
+              </FormControl>
+            </Box>
+
             {error && (
               <Alert severity="error" sx={{ mb: 3 }}>
                 {error}
@@ -125,7 +176,7 @@ const MyBookings = () => {
               <Box sx={{ display: "flex", justifyContent: "center", py: 4 }}>
                 <CircularProgress />
               </Box>
-            ) : bookings.length === 0 ? (
+            ) : filteredAndSortedBookings.length === 0 ? (
               <Box
                 sx={{
                   textAlign: "center",
@@ -154,7 +205,7 @@ const MyBookings = () => {
               </Box>
             ) : (
               <Grid container spacing={3}>
-                {bookings.map((booking) => (
+                {filteredAndSortedBookings.map((booking) => (
                   <Grid item xs={12} key={booking.id}>
                     <Card
                       sx={{
@@ -190,12 +241,6 @@ const MyBookings = () => {
                             <Typography variant="h5" component="h2">
                               {booking.hotelName}
                             </Typography>
-                            <Chip
-                              label="Upcoming"
-                              color="primary"
-                              size="small"
-                              sx={{ ml: "auto" }}
-                            />
                           </Box>
 
                           <Box
@@ -216,23 +261,8 @@ const MyBookings = () => {
                             </Typography>
                           </Box>
 
-                          <Typography
-                            variant="body2"
-                            color="text.secondary"
-                            gutterBottom
-                          >
-                            Description: {booking.description}
-                          </Typography>
-
                           <Grid container spacing={2} sx={{ mb: 2 }}>
                             <Grid item xs={12} sm={6}>
-                              <Typography
-                                variant="body2"
-                                color="text.secondary"
-                                gutterBottom
-                              >
-                                Date
-                              </Typography>
                               <Box
                                 sx={{
                                   display: "flex",

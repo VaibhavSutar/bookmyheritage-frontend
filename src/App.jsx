@@ -21,6 +21,12 @@ import Signup from "./pages/Signup";
 import ForgotPassword from "./pages/ForgotPassword";
 import "./App.css";
 import MuseumDetail from "./pages/MuseumDetails";
+import AdminLogin from "./pages/AdminLogin";
+import AdminDashboard from "./pages/AdminDashboard";
+import PlacesPage from "./pages/ManagePlace";
+import { Dashboard } from "@mui/icons-material";
+import AdminLayout from "./pages/AdminLayout";
+import Adminstats from "./pages/Dashboard";
 
 let theme = createTheme({
   palette: {
@@ -173,18 +179,25 @@ function App() {
           >
             <Routes>
               <Route path="/" element={<Home />} />
-              <Route path="/hotels" element={<Hotels />} />
+              {/* <Route path="/hotels" element={<Hotels />} />
               <Route path="/hotels/:id" element={<HotelDetail />} />
-              <Route path="/booking/:id" element={<Booking />} />
+              <Route path="/booking/:id" element={<Booking />} /> */}
               <Route path="/place/:id" element={<MuseumDetail />} />
-              <Route path="/wishlist" element={<Wishlist />} />
+              {/* <Route path="/wishlist" element={<Wishlist />} /> */}
               <Route path="/profile" element={<Profile />} />
-
               <Route path="/my-bookings" element={<MyBookings />} />
-              <Route path="/become-host" element={<BecomeHost />} />
+              {/* <Route path="/become-host" element={<BecomeHost />} /> */}
               <Route path="/login" element={<Login />} />
               <Route path="/signup" element={<Signup />} />
               <Route path="/forgot-password" element={<ForgotPassword />} />
+              <Route path="/admin/login" element={<AdminLogin />} />
+              {/* <Route path="/admin/home" element={<AdminDashboard />} />
+              <Route path="/admin/manageplace" element={<PlacesPage />} /> */}
+              {/* <Route path="/admin/stats" element={<Dashboard />} /> */}
+              <Route path="/admin/*" element={<AdminLayout />}>
+                <Route path="dashboard" element={<Adminstats />} />
+                <Route path="manageplace" element={<PlacesPage />} />
+              </Route>
             </Routes>
             {/* <PropertyList /> */}
           </Suspense>

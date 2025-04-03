@@ -113,9 +113,11 @@ function Home() {
         }}
       >
         <Carousel
-          indicators={false}
-          navButtonsAlwaysVisible
+          indicators={true} // Enable indicators for better navigation
+          // navButtonsAlwaysVisible={true} // Ensure navigation buttons are always visible
           animation="fade"
+          autoPlay={true} // Enable auto-play for smooth transitions
+          interval={5000} // Set interval for auto-play (5 seconds)
           sx={{ height: "100%" }}
         >
           {heroImages.map((image, index) => (
